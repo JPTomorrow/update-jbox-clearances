@@ -1,63 +1,86 @@
+/*
+    Author: Justin Morrow
+    Date Created: 5/13/2021
+    Description: A Module for performing rudamentary raycasting in Revit
+*/
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
-using JPMorrow.Revit.Documents;
 using JPMorrow.Tools.Diagnostics;
 
 namespace JPMorrow.Revit.Tools
 {
-	public struct RRay
-	{
-		public RRayCollision[] collisions;
-		public XYZ direction;
-		public XYZ start_point;
+    public class RRay
+    {
+        public XYZ Direction { get; private set; } = new XYZ(-9999,-9999,-9999);
+        public XYZ StartPoint { get; private set; } = new XYZ(-9999,-9999,-9999);
 
-		public bool GetFarthestCollision(out RRayCollision col)
+        private List<RRayCollision> _collisions { get; set; } = new List<RRayCollision>();
+        public IList<RRayCollision> Collisions { get => _collisions; }
+        public bool HasCollisions { get => _collisions.Any(); }
+
+		public RRay(IEnumerable<RRayCollision> collisions, XYZ direction, XYZ start_point)
 		{
-			if(!collisions.Any())
+            Direction = direction;
+            StartPoint = start_point;
+            _collisions = collisions.ToList();
+        }
+
+        public bool GetFarthestCollision(out RRayCollision col)
+		{
+			if(!HasCollisions)
 			{
-				col = new RRayCollision();
-				return false;
+                col = null;
+                return false;
 			}
-			var max = collisions.Max(y => y.distance);
-			col = collisions.Where(x => x.distance == max).First();
+			var max = _collisions.Max(y => y.Distance);
+			col = _collisions.Where(x => x.Distance == max).First();
 			return true;
 		}
 
 		public bool GetNearestCollision(out RRayCollision col)
 		{
-			if(!collisions.Any())
+			if(!HasCollisions)
 			{
-				col = new RRayCollision();
-				return false;
+                col = null;
+                return false;
 			}
-			var min = collisions.Min(y => y.distance);
-			col = collisions.Where(x => x.distance == min).First();
+			var min = _collisions.Min(y => y.Distance);
+			col = _collisions.Where(x => x.Distance == min).First();
 			return true;
 		}
 	}
 
-	public struct RRayCollision
+	public class RRayCollision
 	{
-		public XYZ point;
-		public double distance;
-		public ElementId other_id;
-	}
+        public XYZ Point { get; private set; } = new XYZ(-9999,-9999,-9999);
+        public double Distance { get; private set; } = -9999;
+        public ElementId OtherId { get; private set; } = ElementId.InvalidElementId;
+
+		public bool IsValid { get => OtherId != ElementId.InvalidElementId; }
+
+        public RRayCollision(XYZ point, double distance, ElementId other_id)
+		{
+            Point = point;
+            Distance = distance;
+            OtherId = other_id;
+        }
+    }
 
 	public static class RevitRaycast
 	{
 		/// <summary>
 		/// Cast a ray in a direction and return all collisions
 		/// </summary>
-		public static RRay Cast(ModelInfo info, View3D view, List<BuiltInCategory> find_cats, XYZ origin_pt, XYZ ray_dir, double max_distance = -1, List<ElementId> ids_to_ignore = null)
+		public static RRay Cast(
+			Document doc, View3D view, List<BuiltInCategory> find_cats, 
+			XYZ origin_pt, XYZ ray_dir, double max_distance = -1, 
+			List<ElementId> ids_to_ignore = null)
 		{
-			RRay ray = new RRay
-			{
-				direction = ray_dir,
-				start_point = origin_pt
-			};
+			
 
 			bool prune_lengths = max_distance >= 0;
 
@@ -68,7 +91,7 @@ namespace JPMorrow.Revit.Tools
 			};
 
 			List<ReferenceWithContext> rwcs = new List<ReferenceWithContext>();
-			rwcs = ref_intersect.Find(ray.start_point, ray.direction).ToList();
+			rwcs = ref_intersect.Find(origin_pt, ray_dir).ToList();
 
 			if(prune_lengths)
 			{
@@ -88,34 +111,32 @@ namespace JPMorrow.Revit.Tools
 				Reference r = rwc.GetReference();
 				if(ids_to_ignore.Any(x => x.IntegerValue == r.ElementId.IntegerValue)) continue;
 
-				Element collided_element = info.DOC.GetElement(r.ElementId);
+				Element collided_element = doc.GetElement(r.ElementId);
 				if(collided_element == null) continue;
 
-				RRayCollision ray_collision = new RRayCollision();
-				if(max_distance == -1)
+                RRayCollision ray_collision;
+                if(max_distance == -1)
 				{
-					ray_collision.distance = rwc.Proximity;
-					ray_collision.other_id = collided_element.Id;
-					ray_collision.point = r.GlobalPoint;
+                    ray_collision = new RRayCollision(r.GlobalPoint, rwc.Proximity, collided_element.Id);
 					temp_collisions_storage.Add(ray_collision);
 				}
 				else
 				{
 					if(rwc.Proximity <= max_distance)
 					{
-						ray_collision.distance = rwc.Proximity;
-						ray_collision.other_id = collided_element.Id;
-						ray_collision.point = r.GlobalPoint;
+						ray_collision = new RRayCollision(r.GlobalPoint, rwc.Proximity, collided_element.Id);
 						temp_collisions_storage.Add(ray_collision);
 					}
 				}
 			}
 
-			ray.collisions = temp_collisions_storage.ToArray();
+            RRay ray = new RRay(temp_collisions_storage, ray_dir, origin_pt);
 			return ray;
 		}
 
-		public static IEnumerable<ElementId> CastSphere(ModelInfo info, XYZ start_pt, double radius, BuiltInCategory bic = BuiltInCategory.INVALID)
+		public static IEnumerable<ElementId> CastSphere(
+			Document doc, XYZ start_pt, double radius, 
+			BuiltInCategory bic = BuiltInCategory.INVALID)
 		{
 			Solid CreateSphereAt(XYZ center, double radius)
 			{
@@ -150,7 +171,7 @@ namespace JPMorrow.Revit.Tools
 
 			ElementIntersectsSolidFilter intersectSphere = new ElementIntersectsSolidFilter(sphere);
 
-			FilteredElementCollector coll = new FilteredElementCollector(info.DOC);
+			FilteredElementCollector coll = new FilteredElementCollector(doc);
 
 
 			var intersection = bic == BuiltInCategory.INVALID ? coll.WherePasses(intersectSphere).ToElementIds() : coll.OfCategory(bic).WherePasses(intersectSphere).ToElementIds();
@@ -161,7 +182,9 @@ namespace JPMorrow.Revit.Tools
 		/// <summary>
 		/// Create model lines in a 3D view
 		/// </summary>
-		public static void DrawModelLines(ModelInfo info, ExternalEvent ev, InsertModelLine iml,  WorksetId workset_id, XYZ[] pts = null)
+		public static void DrawModelLines(
+			Document doc, ExternalEvent ev, InsertModelLine iml,  
+			WorksetId workset_id, XYZ[] pts = null)
 		{
 			if(pts == null || !pts.Any())
 				throw new Exception("No points were provided for drawing.");
@@ -169,7 +192,7 @@ namespace JPMorrow.Revit.Tools
 			if(pts.Count() % 2 != 0)
 				throw new Exception("Odd number of points feed to the display model lines.");
 
-			iml.Info = info;
+			iml.Document = doc;
 			iml.Line_Points = pts;
 			iml.Workset_Id = workset_id;
 			ev.Raise();
@@ -178,13 +201,13 @@ namespace JPMorrow.Revit.Tools
 
 	public class InsertModelLine : IExternalEventHandler
 	{
-		public ModelInfo Info { get; set; }
+		public Document Document { get; set; }
 		public XYZ[] Line_Points { get; set; }
 		public WorksetId Workset_Id { get; set; }
 
 		public void Execute(UIApplication app)
 		{
-			using (Transaction tx = new Transaction(Info.DOC, "placing model line"))
+			using (Transaction tx = new Transaction(Document, "placing model line"))
 			{
 				tx.Start();
 				List<XYZ> pts_queue = new List<XYZ>(Line_Points);
@@ -207,7 +230,7 @@ namespace JPMorrow.Revit.Tools
 			XYZ q = line.GetEndPoint(1);
 			XYZ norm = new XYZ(-10000, -10000, 0);
 			Plane plane = Plane.CreateByThreePoints(p, q, norm);
-			SketchPlane skPlane = SketchPlane.Create(Info.DOC, plane);
+			SketchPlane skPlane = SketchPlane.Create(Document, plane);
 			return skPlane;
 		}
 
@@ -228,7 +251,7 @@ namespace JPMorrow.Revit.Tools
 				}
 
 				ModelCurve model_line_curve = null;
-				model_line_curve = Info.DOC.Create.NewModelCurve(line, NewSketchPlanePassLine(line));
+				model_line_curve = Document.Create.NewModelCurve(line, NewSketchPlanePassLine(line));
 
 				Parameter workset_param = model_line_curve.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM );
 				workset_param.Set(Workset_Id.IntegerValue);
@@ -237,7 +260,7 @@ namespace JPMorrow.Revit.Tools
 				ICollection<ElementId> styles = model_line_curve.GetLineStyleIds();
 				foreach(ElementId eid in styles)
 				{
-					Element e = Info.DOC.GetElement(eid);
+					Element e = Document.GetElement(eid);
 					if (e.Name == line_style)
 					{
 						model_line_curve.LineStyle = e;

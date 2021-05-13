@@ -10,6 +10,7 @@ using MoreLinq;
 using JPMorrow.Revit.Measurements;
 using JPMorrow.Tools.Diagnostics;
 using System.Windows.Forms;
+using JPMorrow.Revit.Loader;
 
 namespace MainApp
 {
@@ -20,6 +21,8 @@ namespace MainApp
         private readonly string FixtureFamilyName = "Conduit Junction Box - Clearance.rfa";
 		private string FixtureFamilyNameNoExt { get => FixtureFamilyName.Split('.').First(); }
 
+        private readonly string[] FixtureTypeNames = new string[] { "Standard", "Two Gang" };
+
         public Result Execute(ExternalCommandData cData, ref string message, ElementSet elements)
         {
             string[] dataDirectories = new string[] { "families" };
@@ -29,13 +32,17 @@ namespace MainApp
 			ModelInfo revit_info = ModelInfo.StoreDocuments(cData, dataDirectories, debugApp);
 			string fam_path = ModelInfo.GetDataDirectory("families",  true);
 
-			// create view for processing fixtures
-			var FixtureCLearanceView = ViewGen.CreateView(revit_info, "FixtureCLearanceGenerated", BICategoryCollection.FixtureClearanceView);
+            FamilyLoader.LoadFamilies(revit_info, fam_path, FixtureFamilyName);
+
+            // create view for processing fixtures
+            var FixtureCLearanceView = ViewGen.CreateView(revit_info, "FixtureCLearanceGenerated", BICategoryCollection.FixtureClearanceView);
 
             // collect and filter fixture elements
             FilteredElementCollector coll = new FilteredElementCollector(revit_info.DOC, revit_info.UIDOC.ActiveView.Id);
             var fixtures = coll.OfCategory(BuiltInCategory.OST_ElectricalFixtures).ToElements();
+
             fixtures = PruneElementsByFamilyName(FixtureFamilyNameNoExt, fixtures, out var failed_family_name_fixtures);
+            fixtures = PruneElementsByTypeNames(FixtureTypeNames, fixtures, out var failed_type_fixtures);
 
             // promt user about failed fixtures
             if(failed_family_name_fixtures.Any())
@@ -63,7 +70,7 @@ namespace MainApp
                 }
             }
 
-            var failed_generate_fixtures = GenerateFixtureClearances(revit_info, lines, FixtureCLearanceView);
+            var failed_generate_fixtures = GenerateFixtureClearances(revit_info.DOC, lines, FixtureCLearanceView);
 
             // promt user about failed fixtures
             if(failed_generate_fixtures.Any())
@@ -107,6 +114,34 @@ namespace MainApp
             return ret_els;
         }
 
+        /// <summary>
+        /// Filters the provided elements based on whether they match the provided type name
+        /// </summary>
+        /// <param name="typ_names">The type name to match against</param>
+        /// <param name="elements">elements to filter</param>
+        /// <param name="failed_elements">failed element ids that did not pass the filter</param>
+        /// <returns>a list of elements that match the provided type name</returns>
+		private static IList<Element> PruneElementsByTypeNames(string[] type_names, IEnumerable<Element> elements, out IEnumerable<ElementId> failed_elements)
+		{
+            var ret_els = new List<Element>();
+            var failed_ids = new List<ElementId>();
+
+			foreach(var f in elements)
+			{
+				if(f as FamilyInstance != null)
+				{
+                    var fam_name = (f as FamilyInstance).Symbol.FamilyName;
+                    if(type_names.Any(x => x.Equals(fam_name.GetType().Name))) ret_els.Add(f);
+					else failed_ids.Add(f.Id);
+                }
+				else
+                    failed_ids.Add(f.Id);
+			}
+
+            failed_elements = failed_ids.ToList();
+            return ret_els;
+        }
+
         private static Face GetTopFaceOfFixture(Document doc, Element fixture, View3D view)
         {
             Options opt = new Options();
@@ -115,20 +150,24 @@ namespace MainApp
             var geo_el = fixture.get_Geometry(opt);
             Face final_face = null;
 
-            foreach(var geo_obj in geo_el) {
+            foreach(var geo_obj in geo_el) 
+            {
                 var geo_inst = geo_obj as GeometryInstance;
                 if(geo_inst == null) continue;
 
-                foreach(var obj in geo_inst.GetInstanceGeometry()) {
+                foreach(var obj in geo_inst.GetInstanceGeometry()) 
+                {
                     var solid = obj as Solid;
                     if(solid == null || solid.Edges.Size == 0 || solid.Faces.Size == 0) continue;
 
                     var gstyle = doc.GetElement(solid.GraphicsStyleId) as GraphicsStyle;
-                    if(gstyle != null && gstyle.Name.Contains("Light Source")) continue;
+                    if(gstyle == null) continue;
+                    if(gstyle.Name.Contains("Light Source")) continue;
 
                     List<Face> faces = new List<Face>();
 
-                    foreach(Face f in solid.Faces) {
+                    foreach(Face f in solid.Faces) 
+                    {
                         if(f == null) continue;
                         faces.Add(f);
                     }
@@ -138,7 +177,8 @@ namespace MainApp
                     var ordered_faces = faces.OrderByDescending(x => {
                         var pts = new List<XYZ>();
 
-                        foreach(CurveLoop loop in x.GetEdgesAsCurveLoops()) {
+                        foreach(CurveLoop loop in x.GetEdgesAsCurveLoops()) 
+                        {
                             if(loop == null) continue;
                             foreach(Curve c in loop) {
                                 if(c == null) continue;
@@ -165,7 +205,9 @@ namespace MainApp
         private static IList<Line> GetLineGeometryFromFace(Face face)
         {
             List<Line> temp_lines = new List<Line>();
-            foreach(CurveLoop loop in face.GetEdgesAsCurveLoops()) {
+
+            foreach(CurveLoop loop in face.GetEdgesAsCurveLoops()) 
+            {
                 foreach(Curve c in loop) {
                     var l = c as Line;
                     if(l == null) continue;
@@ -191,30 +233,33 @@ namespace MainApp
             return temp_lines.ToArray();
         }
 
-        private static IList<ElementId> GenerateFixtureClearances(ModelInfo info, IEnumerable<FixtureLineGeo> geos, View3D view)
+        private static IList<ElementId> GenerateFixtureClearances(Document doc, IEnumerable<FixtureLineGeo> geos, View3D view)
         {
             var failed_fixtures = new List<ElementId>();
 
             // TAG FIXTURES
-            using TransactionGroup tgrp = new TransactionGroup(info.DOC, "Getting light fixture elevations");
-			using Transaction tx = new Transaction(info.DOC, "light fixture elevations");
+            using TransactionGroup tgrp = new TransactionGroup(doc, "Getting light fixture elevations");
+			using Transaction tx = new Transaction(doc, "light fixture elevations");
             tgrp.Start();
 			tx.Start();
 
-            double min_len = RMeasure.LengthDbl(info, "2'");
+            double min_len = RMeasure.LengthDbl(doc, "2'");
 
-			foreach (var pack in geos) {
+			foreach (var pack in geos) 
+            {
 				List<double> ray_measurments = new List<double>();
 
-				foreach(var line in pack.Lines) {
+				foreach(var line in pack.Lines) 
+                {
 					var pt = RGeo.DerivePointBetween(line, line.Length / 2);
-					var ray = RevitRaycast.Cast(info, view, BICategoryCollection.FixtureClearanceClash.ToList(), pt, RGeo.PrimitiveDirection.Up);
+					var ray = RevitRaycast.Cast(doc, view, BICategoryCollection.FixtureClearanceClash.ToList(), pt, RGeo.PrimitiveDirection.Up);
 
-					if(ray.collisions.Any()) {
-						var cols = ray.collisions.OrderBy(x => x.distance).ToList();
+					if(ray.Collisions.Any()) 
+                    {
+						var cols = ray.Collisions.OrderBy(x => x.Distance).ToList();
 						foreach(var coll in cols) {
-							if(coll.distance <= min_len) continue;
-							ray_measurments.Add(coll.distance);
+							if(coll.Distance <= min_len) continue;
+							ray_measurments.Add(coll.Distance);
 							break;
 						}
 					}
@@ -224,7 +269,7 @@ namespace MainApp
 
 				try 
                 {
-                    double tolerance = RMeasure.LengthDbl(info, "1\"");
+                    double tolerance = RMeasure.LengthDbl(doc, "1\"");
 
 					pack.Fixture.LookupParameter("Height To Structure Min").Set("");
 					pack.Fixture.LookupParameter("Height To Structure Max").Set("");
@@ -235,8 +280,8 @@ namespace MainApp
 						var min = ray_measurments.MinBy(x => x).First();
 
 
-                        var min_str = RMeasure.LengthFromDbl(info, min);
-						var max_str = RMeasure.LengthFromDbl(info, max);
+                        var min_str = RMeasure.LengthFromDbl(doc, min);
+						var max_str = RMeasure.LengthFromDbl(doc, max);
 
 						if(max > min + tolerance) 
                         {
@@ -250,7 +295,7 @@ namespace MainApp
 					}
 					else if(ray_measurments.Count == 1) 
                     {
-                        var min_str = RMeasure.LengthFromDbl(info, ray_measurments.First());
+                        var min_str = RMeasure.LengthFromDbl(doc, ray_measurments.First());
 						pack.Fixture.LookupParameter("Height To Structure #1").Set(min_str);
 					}
 					else 
@@ -267,7 +312,7 @@ namespace MainApp
 
 			foreach(var id in failed_fixtures) 
             {
-				var fixture = info.DOC.GetElement(id);
+				var fixture = doc.GetElement(id);
 				fixture.LookupParameter("Height To Structure Min").Set("");
 				fixture.LookupParameter("Height To Structure Max").Set("");
 			}
