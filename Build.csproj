@@ -120,6 +120,7 @@
     <Message Importance="high" Text="Compacting DLLs with ILRepack"  />
     <!-- in this CreateItem stanza, we collect all the DLLs for the referenced projects -->
     <ItemGroup>
+      <_MergeItem Include="build/$(TargetFramework)\MoreLinq.dll" />
       <_MergeItem Include="build/$(TargetFramework)\$(AssemblyName).dll" />
     </ItemGroup>
 
@@ -127,6 +128,9 @@
       <Output TaskParameter="Include" ItemName="AssembliesToMerge" />
     </CreateItem>
 
+    <CreateItem Include="build/$(TargetFramework)/MoreLinq.dll">
+      <Output TaskParameter="Include" ItemName="AssembliesToMerge" />
+    </CreateItem>
 
     <!-- This weird bit of hieroglyphics is the assemblies to merge, quoted, and separated by spaces -->
     <!-- Example:  "c:\foo\project1\bin\Debug\ProjectOne.dll"   "c:\foo\project2\bin\Debug\ProjectTwo.dll"  -->
@@ -156,6 +160,13 @@
 
     <Copy SourceFiles="@(_CopyItems)" DestinationFolder="C:\ProgramData\Autodesk\Revit\Addins\MarathonScripts\$(PrefixAssembly)"
 	  SkipUnchangedFiles="false" OverwriteReadOnlyFiles="$(OverwriteReadOnlyFiles)" />
+
+    <ItemGroup>
+      <_CopyItems_3 Include=".\families\*.rfa" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(_CopyItems_3)" DestinationFolder="C:\ProgramData\Autodesk\Revit\Addins\MarathonScripts\$(PrefixAssembly)\settings\families"
+	  SkipUnchangedFiles="false" OverwriteReadOnlyFiles="true" />
   </Target>
 
 </Project>

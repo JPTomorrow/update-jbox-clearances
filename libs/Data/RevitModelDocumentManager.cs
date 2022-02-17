@@ -42,7 +42,9 @@ namespace JPMorrow.Revit.Documents
 			if(AppBasePath == null)
 			{
 				AppBasePath = string.Join("\\", module_path.Split('\\').ToList().Where(x => !x.Contains("Ribbon")));
-				AppBasePath += debug ? "\\RevitTestBed\\" : "\\" + assem.GetName().Name + "\\";
+                var ass_name = assem.GetName().Name;
+				if(ass_name.Contains("_")) ass_name = ass_name.Split('_').First();
+                AppBasePath += debug ? "\\RevitTestBed\\" : "\\" + ass_name + "\\";
 			}
 
 			if(SettingsBasePath == null)

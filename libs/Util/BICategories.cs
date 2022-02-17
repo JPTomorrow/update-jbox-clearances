@@ -22,11 +22,7 @@ namespace JPMorrow.BICategories
 		};
 
 		public static readonly BuiltInCategory[] FixtureClearanceClash = new BuiltInCategory[] {
-				BuiltInCategory.OST_Ceilings,
 				BuiltInCategory.OST_Floors,
-				BuiltInCategory.OST_Roofs,
-				BuiltInCategory.OST_StructuralFraming,
-				BuiltInCategory.OST_StructuralFoundation,
 				BuiltInCategory.OST_RvtLinks,
 		};
 	}

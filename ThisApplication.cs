@@ -11,6 +11,7 @@ using JPMorrow.Revit.Measurements;
 using JPMorrow.Tools.Diagnostics;
 using System.Windows.Forms;
 using JPMorrow.Revit.Loader;
+using Autodesk.Revit.DB.Structure;
 
 namespace MainApp
 {
@@ -32,7 +33,7 @@ namespace MainApp
 			ModelInfo revit_info = ModelInfo.StoreDocuments(cData, dataDirectories, debugApp);
 			string fam_path = ModelInfo.GetDataDirectory("families",  true);
 
-            FamilyLoader.LoadFamilies(revit_info, fam_path, FixtureFamilyName);
+            FamilyLoader.LoadFamilies(revit_info, fam_path, FixtureFamilyName, "debug_pt.rfa");
 
             // create view for processing fixtures
             var FixtureCLearanceView = ViewGen.CreateView(revit_info, "FixtureCLearanceGenerated", BICategoryCollection.FixtureClearanceView);
@@ -64,7 +65,7 @@ namespace MainApp
             {
                 Face top_face = GetTopFaceOfFixture(revit_info.DOC, f, FixtureCLearanceView); 
                 if(top_face != null)
-                {
+                { 
                     var l = GetLineGeometryFromFace(top_face).ToArray();
                     lines.Add(new FixtureLineGeo(f, l));
                 }
@@ -130,8 +131,8 @@ namespace MainApp
 			{
 				if(f as FamilyInstance != null)
 				{
-                    var fam_name = (f as FamilyInstance).Symbol.FamilyName;
-                    if(type_names.Any(x => x.Equals(fam_name.GetType().Name))) ret_els.Add(f);
+                    var fam_name = (f as FamilyInstance).Symbol.Name;
+                    if(type_names.Any(x => x.Equals(fam_name))) ret_els.Add(f);
 					else failed_ids.Add(f.Id);
                 }
 				else
@@ -144,6 +145,8 @@ namespace MainApp
 
         private static Face GetTopFaceOfFixture(Document doc, Element fixture, View3D view)
         {
+            // RGeoDebug.DisplayCornerPointsOnElementGeometry(doc, fixture, view);
+
             Options opt = new Options();
             opt.View = view;
             opt.ComputeReferences = true;
@@ -157,20 +160,34 @@ namespace MainApp
 
                 foreach(var obj in geo_inst.GetInstanceGeometry()) 
                 {
+                    debugger.show(err:"test");
                     var solid = obj as Solid;
-                    if(solid == null || solid.Edges.Size == 0 || solid.Faces.Size == 0) continue;
+                    RGeoDebug.DisplayCornerPointsOnSolid(doc, fixture, solid);
+
+                    if(solid == null || solid.Faces.Size == 0) continue;
+                    debugger.show(err:"test2");
 
                     var gstyle = doc.GetElement(solid.GraphicsStyleId) as GraphicsStyle;
+                    debugger.show(err:gstyle == null ? "null" : "not null");
                     if(gstyle == null) continue;
+                    debugger.show(err:"test3");
                     if(gstyle.Name.Contains("Light Source")) continue;
+                    debugger.show(err:"test4");
 
                     List<Face> faces = new List<Face>();
 
+                    // see if it is glass material (the material on the clearance) and skip if it is
+                    debugger.show(err: solid.Faces.Size.ToString());
                     foreach(Face f in solid.Faces) 
                     {
                         if(f == null) continue;
+                        Material mat = doc.GetElement(f.MaterialElementId) as Material;
+                        debugger.debug_show(err:mat.Name);
+                        if(mat.Name.ToLower().Contains("glass")) continue;
                         faces.Add(f);
                     }
+
+                    debugger.show(faces.Count().ToString());
 
                     if(!faces.Any()) continue;
 
@@ -235,15 +252,14 @@ namespace MainApp
 
         private static IList<ElementId> GenerateFixtureClearances(Document doc, IEnumerable<FixtureLineGeo> geos, View3D view)
         {
-            var failed_fixtures = new List<ElementId>();
-
             // TAG FIXTURES
-            using TransactionGroup tgrp = new TransactionGroup(doc, "Getting light fixture elevations");
-			using Transaction tx = new Transaction(doc, "light fixture elevations");
+            using TransactionGroup tgrp = new TransactionGroup(doc, "Getting fixture elevation to floor");
+			using Transaction tx = new Transaction(doc, "fixture clearance elevations");
             tgrp.Start();
 			tx.Start();
 
-            double min_len = RMeasure.LengthDbl(doc, "2'");
+            string clearance_param = "Top Clearance";
+            var failed_fixtures = new List<ElementId>();
 
 			foreach (var pack in geos) 
             {
@@ -258,7 +274,6 @@ namespace MainApp
                     {
 						var cols = ray.Collisions.OrderBy(x => x.Distance).ToList();
 						foreach(var coll in cols) {
-							if(coll.Distance <= min_len) continue;
 							ray_measurments.Add(coll.Distance);
 							break;
 						}
@@ -267,36 +282,12 @@ namespace MainApp
 
 				if(!ray_measurments.Any()) continue;
 
-				try 
+                try 
                 {
-                    double tolerance = RMeasure.LengthDbl(doc, "1\"");
-
-					pack.Fixture.LookupParameter("Height To Structure Min").Set("");
-					pack.Fixture.LookupParameter("Height To Structure Max").Set("");
-
-					if(ray_measurments.Count >= 2) 
+					if(ray_measurments.Any()) 
                     {
-						var max = ray_measurments.MaxBy(x => x).First();
 						var min = ray_measurments.MinBy(x => x).First();
-
-
-                        var min_str = RMeasure.LengthFromDbl(doc, min);
-						var max_str = RMeasure.LengthFromDbl(doc, max);
-
-						if(max > min + tolerance) 
-                        {
-							pack.Fixture.LookupParameter("Height To Structure Min").Set(min_str);
-							pack.Fixture.LookupParameter("Height To Structure Max").Set(max_str);
-						}
-						else 
-                        {
-							pack.Fixture.LookupParameter("Height To Structure Min").Set(max_str);
-						}
-					}
-					else if(ray_measurments.Count == 1) 
-                    {
-                        var min_str = RMeasure.LengthFromDbl(doc, ray_measurments.First());
-						pack.Fixture.LookupParameter("Height To Structure #1").Set(min_str);
+						pack.Fixture.LookupParameter(clearance_param).Set(min);
 					}
 					else 
                     {
@@ -313,8 +304,8 @@ namespace MainApp
 			foreach(var id in failed_fixtures) 
             {
 				var fixture = doc.GetElement(id);
-				fixture.LookupParameter("Height To Structure Min").Set("");
-				fixture.LookupParameter("Height To Structure Max").Set("");
+                var one_inch = RMeasure.LengthDbl(doc, "1\"");
+                fixture.LookupParameter(clearance_param).Set(one_inch);
 			}
 
 			tx.Commit();

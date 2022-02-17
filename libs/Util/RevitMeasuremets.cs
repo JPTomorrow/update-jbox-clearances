@@ -6,7 +6,7 @@ namespace JPMorrow.Revit.Measurements {
     public static class RMeasure {
 #if REVIT2017 || REVIT2018 || REVIT2019 || REVIT2020 // DisplayUnitType Depreciated
         public static double LengthDbl(Document doc, string cvt_str) {
-            bool s = UnitFormatUtils.TryParse(info.DOC.GetUnits(), UnitType.UT_Length, cvt_str, out double val);
+            bool s = UnitFormatUtils.TryParse(doc.GetUnits(), UnitType.UT_Length, cvt_str, out double val);
             return s ? val : -1;
         }
 

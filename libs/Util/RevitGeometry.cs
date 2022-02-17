@@ -149,6 +149,39 @@ namespace JPMorrow.Revit.Tools
 				new XYZ(bb.Max.X, bb.Max.Y, bb.Min.Z),
 			};
 		}
+
+        /// <summary>
+        /// Get a BoundingBoxXYZ for the given solid in world space
+        /// </summary>
+        /// <param name="element">element to get global transform from</param>
+        /// <param name="solid">the solid to retrieve BB from</param>
+        /// <returns>Returns a BoundingBoxXYZ for the given solid in world space</returns>
+        public static BoundingBoxXYZ GetBoundingBoxFromSolid(Element element, Solid solid)
+        {
+            if(solid.Volume <= 0) return null;
+            var visible_edge_points = solid.Edges.Cast<Edge>().SelectMany(x => x.Tessellate()).ToList();
+            if (!visible_edge_points.Any()) return null;
+
+            var minX = visible_edge_points.Min(p => p.X);
+            var minY = visible_edge_points.Min(p => p.Y);
+            var minZ = visible_edge_points.Min(p => p.Z);
+
+            var maxX = visible_edge_points.Max(p => p.X);
+            var maxY = visible_edge_points.Max(p => p.Y);
+            var maxZ = visible_edge_points.Max(p => p.Z);
+
+            var min = new XYZ(minX, minY, minZ);
+            var max = new XYZ(maxX, maxY, maxZ);
+
+            var shrinkWrapBoundingBox = new BoundingBoxXYZ
+            {
+                Min = min,
+                Max = max,
+                Transform = (element as FamilyInstance).GetTotalTransform()
+            };
+
+            return shrinkWrapBoundingBox;
+        }
 	}
 
 	/// <summary>
